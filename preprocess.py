@@ -3,6 +3,7 @@ from transformers.utils import logging as hf_logging
 from datasets import load_dataset
 import pandas as pd
 import re
+from sklearn.model_selection import train_test_split
 
 dataset = load_dataset("HallowsYves/CPSC483-data")
 train_df = dataset['train'].to_pandas()
@@ -43,5 +44,13 @@ mask = train_df.apply(row_within_length, axis=1)
 filtered_train_df = train_df[mask].reset_index(drop=True)
 print(f"Kept {len(filtered_train_df)} / {len(train_df)} rows")
 
-print("Exporting as:  'train_clean.parquet' ")
-filtered_train_df.to_parquet("train_clean.parquet", index=False)
+print("Creating train/test split (80/20)...")
+train_split, test_split = train_test_split(
+    filtered_train_df, test_size=0.2, random_state=42, shuffle=True
+)
+
+print(f"Train rows: {len(train_split)} | Test rows: {len(test_split)}")
+
+print("Exporting splits as parquet files: 'train_clean.parquet' and 'test_clean.parquet'")
+train_split.to_parquet("train_clean.parquet", index=False)
+test_split.to_parquet("test_clean.parquet", index=False)
