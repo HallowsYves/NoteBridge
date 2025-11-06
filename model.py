@@ -69,3 +69,17 @@ def make_preprocess(max_source_len):
         return model_inputs
     return _prep
 
+# Tokenize & HF Datasets
+ds_full_train = Dataset.from_pandas(train_df[["article", "highlights"]])
+ds_full_test = Dataset.from_pandas(test_df[["article", "highlights"]])
+
+ds_reduced_train = Dataset.from_pandas(train_df_reduced[["article", "highlights"]])
+ds_reduced_test = Dataset.from_pandas(test_df_reduced[["article","highlights"]])
+
+ds_full_train_tokenized = ds_full_train.map(make_preprocess(MAX_SOURCE_LEN_FULL), batched=True, remove_columns=["article", "highlights"])
+ds_full_test_tokenized = ds_full_test.map(make_preprocess(MAX_SOURCE_LEN_FULL), batched=True, remove_columns=["article", "highlights"])
+
+ds_reduced_train_tokenized = ds_reduced_train.map(make_preprocess(MAX_SOURCE_LEN_REDUCED), batched=True, remove_columns=["article", "highlights"])
+ds_reduced_test_tokenized = ds_reduced_test.map(make_preprocess(MAX_SOURCE_LEN_REDUCED), batched=True, remove_columns=["article", "highlights"])
+
+data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=MODEL_NAME)
