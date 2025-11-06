@@ -48,3 +48,24 @@ test_df_reduced = test_df.copy()
 
 train_df_reduced["article"] = train_df_reduced["article"].apply(lead3)
 test_df_reduced["article"] = test_df_reduced["article"].apply(lead3)
+
+# Tokenizer & preprocessing
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
+
+def make_preprocess(max_source_len):
+    def _prep(batch):
+        model_inputs = tokenizer(
+            batch["article"],
+            max_length=max_source_len,
+            truncation=True
+        )
+        with tokenizer.as_target_tokenizer():
+            labels = tokenizer(
+                batch["highlights"],
+                max_length=MAX_TARGET_LEN,
+                truncation=True
+            )
+        model_inputs["labels"] = labels["input_ids"]
+        return model_inputs
+    return _prep
+
