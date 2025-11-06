@@ -11,10 +11,11 @@ from transformers import (
 )
 
 # Device selection
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+device = torch.device("cpu")
+torch.set_num_threads(os.cpu_count())
 print(f"Using device: {device}")
 # Configuration
-MODEL_NAME = "google/pegasus-small"  # much smaller (~57M params)
+MODEL_NAME = "t5-small"  # much smaller (~57M params)
 MAX_SOURCE_LEN_FULL = 256
 MAX_SOURCE_LEN_REDUCED = 192
 MAX_TARGET_LEN = 64
@@ -64,8 +65,9 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
 
 def make_preprocess(max_source_len):
     def _prep(batch):
+        inputs = ["summarize: " + x for x in batch["article"]]
         model_inputs = tokenizer(
-            batch["article"],
+            inputs,
             max_length=max_source_len,
             truncation=True
         )
@@ -77,6 +79,7 @@ def make_preprocess(max_source_len):
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
     return _prep
+
 
 # Tokenize & HF Datasets
 ds_full_train = Dataset.from_pandas(train_df[["article", "highlights"]])
