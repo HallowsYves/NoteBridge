@@ -15,7 +15,7 @@ device = torch.device("cpu")
 torch.set_num_threads(os.cpu_count())
 print(f"Using device: {device}")
 # Configuration
-MODEL_NAME = "t5-small"  # much smaller (~57M params)
+MODEL_NAME = "t5-small"  
 MAX_SOURCE_LEN_FULL = 256
 MAX_SOURCE_LEN_REDUCED = 192
 MAX_TARGET_LEN = 64
@@ -32,7 +32,6 @@ dataset = load_dataset("HallowsYves/CPSC483-data", data_files=data_files)
 train_df = dataset["train"].to_pandas()
 test_df = dataset["test"].to_pandas()
 
-# Subsample to keep local training feasible on M2 Pro (adjust as needed)
 MAX_TRAIN, MAX_TEST = 2000, 500
 if len(train_df) > MAX_TRAIN:
     train_df = train_df.sample(n=MAX_TRAIN, random_state=SEED)
@@ -104,13 +103,13 @@ def train_and_save(train_ds, eval_ds, out_directory, note):
 
     model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)
     model = model.to(device)
-    model.config.use_cache = False  # required when using gradient checkpointing to save memory
+    model.config.use_cache = False  
     model.gradient_checkpointing_enable()
     args = TrainingArguments(
         output_dir=str(output_path / "trainer"),
-        per_device_train_batch_size=BATCH_SIZE,   # 1
-        per_device_eval_batch_size=BATCH_SIZE,    # 1
-        gradient_accumulation_steps=2,            # effective batch ~2
+        per_device_train_batch_size=BATCH_SIZE,   
+        per_device_eval_batch_size=BATCH_SIZE,   
+        gradient_accumulation_steps=2,           
         num_train_epochs=EPOCHS,
         learning_rate=5e-5,
         logging_steps=50,
@@ -148,9 +147,7 @@ def train_and_save(train_ds, eval_ds, out_directory, note):
         }, f)
     return str(save_path)
 
-# -----------------------------
-# Train M1 (full) and M2 (reduced) and report paths
-# -----------------------------
+
 sav_full = train_and_save(
     ds_full_train_tokenized,
     ds_full_test_tokenized,
