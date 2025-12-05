@@ -5,7 +5,6 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 # Use CPU for real-time safety
 device = torch.device("cpu")
 
-# Generation settings optimized for low latency
 GEN_MAX_TOKENS = 48
 NUM_BEAMS = 2
 
@@ -37,16 +36,28 @@ def summarize(text: str, tokenizer, model):
     Generates a summary for the given text using your loaded model.
     Used for rolling, real-time summarization.
     """
+
     if not isinstance(text, str) or len(text.strip()) == 0:
         return ""
 
+    # Light cleaning: remove repeated periods, stutters, ASR artifacts
+    cleaned = text
+    cleaned = cleaned.replace("..", ".")
+    cleaned = cleaned.replace("...", ".")
+    cleaned = cleaned.replace(" .", ".")
+    cleaned = cleaned.strip()
+
+    if len(cleaned.split()) < 6:
+        return ""  
+
     # Prepare model input
-    prompt = "summarize: " + text.strip()
+    prompt = "summarize: " + cleaned
+
     enc = tokenizer(
         prompt,
         return_tensors="pt",
         truncation=True,
-        max_length=256  # rolling window input
+        max_length=256 
     ).to(device)
 
     # Generation (fast settings)

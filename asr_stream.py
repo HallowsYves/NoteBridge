@@ -19,7 +19,8 @@ def audio_callback(indata, frames, time, status):
 
 def load_asr_model():
     print("[ASR] Loading Whisper model...")
-    model = WhisperModel("base.en", device="cpu", compute_type="int8")
+    model = WhisperModel("medium.en", device="cpu", compute_type="float32")
+
     print("[ASR] Whisper ready.")
     return model
 

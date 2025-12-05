@@ -1,51 +1,74 @@
 import nltk
 import re
 
-# Download tokenizer if first time
+PARTIAL_BUFFER = ""
+MIN_CHARS_FOR_SENTENCE = 40  
+
 nltk.download("punkt")
 
-# Rolling window size (number of sentences kept)
 ROLLING_WINDOW = 5
 
-# Internal buffer for the sliding window
 sentence_buffer = []
 
 
+def is_duplicate_sentence(new_sent, buffer):
+    """
+    Prevents adding duplicate or nearly identical sentences to the rolling window.
+    """
+    new_clean = new_sent.lower().strip()
+    for s in buffer:
+        if new_clean == s.lower().strip():
+            return True
+        if new_clean in s.lower().strip() or s.lower().strip() in new_clean:
+            return True
+    return False
+
 def segment_sentences(asr_text: str):
     """
-    Takes raw ASR output and returns a list of clean sentences.
-    Whisper often outputs fragments; NLTK helps correct that.
+    Accumulates ASR text into a temporary buffer.
+    Only returns full, strong sentences when detected.
+    This avoids fragments like 'which is the note' or 'and then'.
     """
-    if not isinstance(asr_text, str) or not asr_text.strip():
+    global PARTIAL_BUFFER
+
+    if not asr_text or not asr_text.strip():
         return []
 
-    # Basic cleaning
-    cleaned = asr_text.strip()
-    cleaned = re.sub(r'\s+', ' ', cleaned)
+    PARTIAL_BUFFER += " " + asr_text.strip()
 
-    # Segment into sentences using NLTK
-    sentences = nltk.sent_tokenize(cleaned)
+    if len(PARTIAL_BUFFER) < MIN_CHARS_FOR_SENTENCE:
+        return []
 
-    return sentences
+    sentences = nltk.sent_tokenize(PARTIAL_BUFFER)
+
+    if len(sentences) <= 1:
+        return []
+
+    complete = sentences[:-1]
+    PARTIAL_BUFFER = sentences[-1]
+
+    complete = [s for s in complete if len(s.split()) >= 3]
+
+    return complete
+
 
 
 
 def update_buffer(new_sentences):
-    """
-    Adds one or multiple sentences to the rolling buffer.
-    Maintains the fixed-length window.
-    Returns the concatenated text for summarization.
-    """
     global sentence_buffer
 
     for sent in new_sentences:
+        if len(sent.split()) < 3:
+            continue
+
+        if is_duplicate_sentence(sent, sentence_buffer):
+            continue
+
         sentence_buffer.append(sent)
 
-    # Keep only the last N sentences
     if len(sentence_buffer) > ROLLING_WINDOW:
         sentence_buffer = sentence_buffer[-ROLLING_WINDOW:]
 
-    # Return window text for summarization
     return " ".join(sentence_buffer)
 
 

@@ -2,3 +2,8 @@
 /models
 
 metrics_results.csv
+__pycache__/asr_stream.cpython-313.pyc
+__pycache__/summarizer.cpython-313.pyc
+__pycache__/text_chunker.cpython-313.pyc
+__pycache__/asr_stream.cpython-313.pyc
+__pycache__/text_chunker.cpython-313.pyc
