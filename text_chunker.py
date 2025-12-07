@@ -24,7 +24,6 @@ def clean_asr_text(text):
 
     text = text.strip()
 
-    # Remove trailing hyphen fragments like "chemical-"
     text = re.sub(r"\b\w+-\s*$", "", text)
 
     # Tokenize
@@ -34,11 +33,9 @@ def clean_asr_text(text):
     prev = None
 
     for w in words:
-        # Remove single-letter or two-letter noise words
         if len(w) < 3:
             continue
         
-        # Remove stutters ("Photos Photosynthesis")
         if w.lower() == prev:
             continue
         
@@ -58,7 +55,6 @@ def segment_sentences(text: str):
     if not text:
         return []
 
-    # Split on sentence-ending punctuation
     parts = re.split(r"([.!?])", text)
     sentences = []
     current = ""
@@ -73,7 +69,6 @@ def segment_sentences(text: str):
                 sentences.append(s)
             current = ""
 
-    # Catch any trailing fragment
     tail = current.strip()
     if tail:
         sentences.append(tail)

@@ -4,19 +4,16 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
-# Avoid symlink issues on Windows HF cache
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["HF_HUB_ENABLE_HARDLINKS"] = "0"
 
 SAMPLE_RATE = 16000
 
-# Chunk size tuned for accuracy (1.2s)
-CHUNK_DURATION = 1.2
+CHUNK_DURATION = 2.0
 CHUNK_SAMPLES = int(SAMPLE_RATE * CHUNK_DURATION)
 
-# 50% overlap for phoneme continuity
-OVERLAP_RATIO = 0.5
+OVERLAP_RATIO = 0.25
 OVERLAP_SAMPLES = int(CHUNK_SAMPLES * OVERLAP_RATIO)
 
 audio_queue = queue.Queue()
@@ -50,7 +47,6 @@ def is_informative(text: str) -> bool:
     if len(t) < 4:
         return False
 
-    # require at least 2 alphabetic characters
     alpha_count = sum(c.isalpha() for c in t)
     if alpha_count < 2:
         return False
@@ -60,7 +56,6 @@ def is_informative(text: str) -> bool:
 
 def load_asr_model():
     print("[ASR] Loading Whisper model (optimized for accuracy)...")
-    # base.en gives much better accuracy than tiny for lectures
     model = WhisperModel("base.en", device="cpu", compute_type="int8")
     print("[ASR] Whisper ready.")
     return model
@@ -109,9 +104,12 @@ def stream_transcripts(model):
 
             segments, _ = model.transcribe(
                 audio_flat,
-                beam_size=5,
+                beam_size=1,
                 vad_filter=True,
+                temperature=0.0,                    
+                compression_ratio_threshold=2.4      
             )
+
 
             for seg in segments:
                 text = seg.text.strip()

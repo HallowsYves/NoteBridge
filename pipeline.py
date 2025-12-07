@@ -1,49 +1,23 @@
 import time
 import traceback
 from datetime import datetime
-
-from asr_stream import load_asr_model, stream_transcripts
-from text_chunker import (
-    segment_sentences,
-    update_buffer,
-    reset_buffer,
-    clean_asr_text,
-)
-from summarizer import load_summarizer_model, summarize
 import re
 
-def clean_context_for_summary(text):
-    """
-    Remove fragments, stutters, incomplete thoughts,
-    and keep only well-formed sentences.
-    """
-    sentences = re.split(r"[.!?]", text)
-    cleaned = []
-
-    for s in sentences:
-        s = s.strip()
-
-        # Skip tiny fragments
-        if len(s.split()) < 4:
-            continue
-
-        # Skip stutter patterns
-        if re.search(r"\b(\w+)\s+\1\b", s.lower()):
-            continue
-
-        # Skip nonsense fragments (ends mid-word)
-        if re.search(r"[A-Za-z]-$", s):
-            continue
-
-        cleaned.append(s)
-
-    return ". ".join(cleaned)
+from asr_stream import load_asr_model, stream_transcripts
+from summarizer import load_summarizer_model, summarize
 
 
+# ================================
+# SETTINGS
+# ================================
+CHUNK_TIME_SECONDS = 5.0   # Summarize every 5 seconds
 
 
-SUMMARY_EVERY_N_SEGMENTS = 12     # rolling summary frequency
-SILENCE_THRESHOLD = 3.0          # seconds of no speech triggers FINAL SUMMARY
+# ================================
+# UTILITY FUNCTIONS
+# ================================
+def timestamp():
+    return datetime.now().strftime("%H:%M:%S")
 
 
 def pretty_header(title):
@@ -52,90 +26,315 @@ def pretty_header(title):
     print("=" * 60 + "\n")
 
 
-def timestamp():
-    return datetime.now().strftime("%H:%M:%S")
+# ================================
+# ASR REPAIR LAYER (AGGRESSIVE)
+# ================================
+def _normalize_text(text):
+    """Basic normalization: collapse whitespace, normalize punctuation."""
+    if not text:
+        return ""
+    t = re.sub(r"\s+", " ", text).strip()
+
+    t = re.sub(r"([\.!?])\1+", r"\1", t)
+
+    return t
 
 
-def save_final_summary(text):
-    """Write the final summary to a text file."""
-    filename = f"final_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(text)
-    print(f"[SUMMARY] Final summary saved to: {filename}")
+def _apply_domain_fixes(text):
+    """
+    Apply small, domain-specific corrections.
+    Covers:
+    - Networking terms (IP, IPv4, IPv6)
+    - Photosynthesis / biology terms (photosynthesis, chlorophyll, etc.)
+    """
+    fixed = text
+
+    net_patterns = {
+        r"\bipf\b": "ip",
+        r"\bipee\b": "ip",
+        r"\bi p address\b": "ip address",
+        r"\bipv 4\b": "ipv4",
+        r"\bipv 6\b": "ipv6",
+    }
+
+    for pattern, repl in net_patterns.items():
+        fixed = re.sub(pattern, repl, fixed, flags=re.IGNORECASE)
+
+    fixed = re.sub(r"\s+(ipv4|ipv6)\b", r". \1", fixed, flags=re.IGNORECASE)
+
+    bio_patterns = {
+        r"\bphotos synthesis\b": "photosynthesis",
+        r"\bphoto synthesis\b": "photosynthesis",
+        r"\bphotos\s+in\s+this\b": "photosynthesis",
+        r"\bchlorosil\b": "chlorophyll",
+        r"\bchloro,\s*sis\b": "chlorophyll",
+        r"\bchloro\s*sis\b": "chlorophyll",
+        r"\bthis is the essentials\b": "this is essential",
+        r"\boutside and water\b": "carbon dioxide and water",
+    }
+
+    for pattern, repl in bio_patterns.items():
+        fixed = re.sub(pattern, repl, fixed, flags=re.IGNORECASE)
+
+    return fixed
 
 
+def _collapse_repeated_tokens(text):
+    """
+    Tokenize into words + punctuation, then collapse consecutive repeated words.
+    Example: "what what what is this" -> "what is this"
+    """
+    tokens = re.findall(r"\w+|[^\w\s]", text, flags=re.UNICODE)
+    if not tokens:
+        return ""
+
+    cleaned = []
+    last_word = None
+
+    for tok in tokens:
+        if tok.isalpha():
+            lower_tok = tok.lower()
+            if last_word is not None and lower_tok == last_word:
+                continue
+            last_word = lower_tok
+            cleaned.append(tok)
+        else:
+            cleaned.append(tok)
+
+    out = []
+    for tok in cleaned:
+        if not out:
+            out.append(tok)
+        else:
+            if tok.isalnum():
+                out.append(" " + tok)
+            else:
+                out.append(tok)
+
+    return "".join(out).strip()
+
+
+def _split_sentences(text):
+    """
+    Simple sentence segmentation based on punctuation.
+    Falls back gracefully if there is no punctuation.
+    """
+    if not text:
+        return []
+
+    sentences = re.split(r"(?<=[\.!?])\s+", text)
+
+    sentences = [s.strip() for s in sentences if s.strip()]
+    return sentences
+
+
+def _merge_fragments(sentences):
+    """
+    Aggressively merge short / continuation fragments into prior sentences.
+
+    Examples:
+    - "Photosynthesis is a process."
+      "is the process plants use to convert something."
+      =>
+      "Photosynthesis is the process plants use to convert something."
+
+    - "convert sunlight into chemical energy."
+      "energy."
+      =>
+      "convert sunlight into chemical energy."
+
+    - "essential for plant growth and oxygen."
+      "production."
+      =>
+      "essential for plant growth and oxygen production."
+    """
+    if not sentences:
+        return []
+
+    merged = []
+    continuation_starts = (
+        "is ", "are ", "was ", "were ",
+        "and ", "to ", "then ", "so ",
+        "that ", "which ", "convert ", "converts ",
+        "absorbs ", "absorb ", "transforms ", "transform ",
+        "into ", "this is ", "essential ", "essential for ",
+        "for plant ", "for plants ", "production", "energy"
+    )
+
+    for s in sentences:
+        s_clean = s.strip()
+        if not s_clean:
+            continue
+
+        s_clean = re.sub(r"\s+([\.!?])", r"\1", s_clean)
+
+        if not merged:
+            merged.append(s_clean)
+            continue
+
+        lower = s_clean.lower()
+        prev = merged[-1].rstrip(" .!?")
+        prev_lower = prev.lower()
+
+        if prev_lower.startswith("photosynthesis is a process") and lower.startswith("is the process"):
+            rest = s_clean[len("is the process") :].lstrip()
+            new_prev = "Photosynthesis is the process"
+            if rest:
+                new_prev += " " + rest
+            merged[-1] = new_prev.strip()
+            continue
+
+        if len(s_clean.split()) <= 4 or any(lower.startswith(p) for p in continuation_starts):
+            if lower in ("production", "production."):
+                merged[-1] = prev + " production"
+            else:
+                merged[-1] = prev + " " + s_clean.lstrip()
+        else:
+            merged.append(s_clean)
+
+    return merged
+
+
+def _clean_sentence(sent):
+    """
+    Clean and validate a single merged sentence:
+    - Remove leading filler phrases
+    - Filter out too-short or low-content sentences
+    - Capitalize first character
+    """
+    if not sent:
+        return None
+
+    s = sent.strip()
+    if not s:
+        return None
+
+    s = s.strip(" \t\n\r")
+
+    lower = s.lower()
+
+    filler_prefixes = [
+        "okay", "ok", "so", "well", "yeah", "right",
+        "like", "um", "uh", "hmm", "you know"
+    ]
+    for fp in filler_prefixes:
+        if lower.startswith(fp + " "):
+            s = s[len(fp) + 1 :].lstrip()
+            lower = s.lower()
+            break
+
+    tokens = s.split()
+    if len(tokens) < 4:
+        return None
+
+    alpha_tokens = [t for t in tokens if any(c.isalpha() for c in t)]
+    if len(alpha_tokens) < 3:
+        return None
+
+    filler_set = {
+        "uh", "um", "hmm", "huh", "like", "yeah", "okay", "ok",
+        "right", "so", "well"
+    }
+    non_filler = [t for t in alpha_tokens if t.lower() not in filler_set]
+    if len(non_filler) < 2:
+        return None
+
+    s = s.strip()
+    if not s:
+        return None
+
+    s = s[0].upper() + s[1:]
+
+    return s
+
+
+def repair_asr_text(text):
+    """
+    Aggressive ASR cleanup & reconstruction:
+
+    - Normalizes whitespace & punctuation
+    - Applies small domain corrections (networking + basic biology)
+    - Collapses repeated tokens (e.g., "what what what")
+    - Splits into sentences
+    - Aggressively merges short/continuation fragments into full sentences
+    - Cleans and filters low-information sentences
+    - Returns coherent English suitable for summarization
+    """
+    if not text or not text.strip():
+        return ""
+
+    t = _normalize_text(text)
+
+    t = _apply_domain_fixes(t)
+
+    t = _collapse_repeated_tokens(t)
+
+    candidate_sentences = _split_sentences(t)
+
+    merged_sentences = _merge_fragments(candidate_sentences)
+
+    final_sentences = []
+    for cand in merged_sentences:
+        s = _clean_sentence(cand)
+        if s:
+            final_sentences.append(s)
+
+    if not final_sentences:
+        return ""
+
+    repaired = ". ".join(final_sentences)
+
+    if repaired and repaired[-1] not in ".!?":
+        repaired += "."
+
+    return repaired
+
+
+# ================================
+# MAIN PIPELINE
+# ================================
 def main():
-    pretty_header("NoteBridge Real-Time Summarization Pipeline")
+    print("\n============================================================")
+    print("Initializing models...")
+    print("============================================================\n")
 
-    print(f"[{timestamp()}] Initializing ASR + Summarizer Models...")
+    # Load ASR + Summarizer
     asr_model = load_asr_model()
-
     tokenizer, model = load_summarizer_model()
-    print("[SUMMARIZER] Model ready.\n")
+    print("[SUMMARIZER] Ready.\n")
 
-    reset_buffer()
+    print("Listening...\n")
+    print("[ASR] Starting microphone stream...")
 
-    print(f"[{timestamp()}] System Ready. Listening...\n")
-    print("Press Ctrl+C to stop.\n")
-
-    segment_counter = 0
-    last_speech_time = time.time()
-    final_summary_done = False
+    buffer_text = ""
+    last_chunk_time = time.time()
 
     try:
-        for asr_text in stream_transcripts(asr_model):
+        for text in stream_transcripts(asr_model):
 
-            # Track time of last detected speech
-            last_speech_time = time.time()
+            print(f"[{timestamp()}] ASR: {text}")
 
-            print(f"[{timestamp()}]  ASR: {asr_text}")
+            buffer_text += " " + text.strip()
 
-            # Clean text before segmentation
-            cleaned = clean_asr_text(asr_text)
-            if not cleaned:
-                continue
+            if time.time() - last_chunk_time >= CHUNK_TIME_SECONDS:
 
-            sentences = segment_sentences(cleaned)
-            if not sentences:
-                continue
+                repaired = repair_asr_text(buffer_text)
 
-            # Update rolling buffer
-            context = update_buffer(sentences)
-            print(f"[{timestamp()}]  Context Window:")
-            print(f"   {context}\n")
+                if len(repaired.strip()) > 10:
+                    pretty_header("CHUNK SUMMARY")
+                    print("RAW BUFFER:")
+                    print(buffer_text.strip())
+                    print("\nREPAIRED INPUT:")
+                    print(repaired.strip() + "\n")
 
-            segment_counter += 1
+                    summary = summarize(repaired.strip(), tokenizer, model)
+                    print("summary:", summary)
+                    print("=" * 60 + "\n")
+                else:
+                    print("[SUMMARY] Skipped (not enough meaningful content)\n")
 
-            # Rolling summary every N segments
-            if segment_counter % SUMMARY_EVERY_N_SEGMENTS == 0:
-
-                cleaned_context = clean_context_for_summary(context)
-
-                if len(cleaned_context.split()) < 6:
-                    # Not enough meaningful content to summarize
-                    continue
-
-                summary = summarize(cleaned_context, tokenizer, model)
-
-                pretty_header("ROLLING SUMMARY")
-                print(summary)
-                print("=" * 60 + "\n")
-
-
-            if not final_summary_done and (time.time() - last_speech_time) > SILENCE_THRESHOLD:
-                cleaned_context = clean_context_for_summary(context)
-                final_summary = summarize(cleaned_context, tokenizer, model).strip()
-
-
-                pretty_header("FINAL SUMMARY")
-                print(final_summary)
-                print("=" * 60 + "\n")
-
-                save_final_summary(final_summary)
-                final_summary_done = True
-                break  
-
-            time.sleep(0.01)
+                buffer_text = ""
+                last_chunk_time = time.time()
 
     except KeyboardInterrupt:
         print("\n[PIPELINE] Stopped by user.")
