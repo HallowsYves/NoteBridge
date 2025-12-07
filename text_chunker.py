@@ -1,79 +1,96 @@
-import nltk
 import re
+from collections import deque
 
-PARTIAL_BUFFER = ""
-MIN_CHARS_FOR_SENTENCE = 40  
+MAX_SENTENCES = 6
 
-nltk.download("punkt")
-
-ROLLING_WINDOW = 5
-
-sentence_buffer = []
-
-
-def is_duplicate_sentence(new_sent, buffer):
-    """
-    Prevents adding duplicate or nearly identical sentences to the rolling window.
-    """
-    new_clean = new_sent.lower().strip()
-    for s in buffer:
-        if new_clean == s.lower().strip():
-            return True
-        if new_clean in s.lower().strip() or s.lower().strip() in new_clean:
-            return True
-    return False
-
-def segment_sentences(asr_text: str):
-    """
-    Accumulates ASR text into a temporary buffer.
-    Only returns full, strong sentences when detected.
-    This avoids fragments like 'which is the note' or 'and then'.
-    """
-    global PARTIAL_BUFFER
-
-    if not asr_text or not asr_text.strip():
-        return []
-
-    PARTIAL_BUFFER += " " + asr_text.strip()
-
-    if len(PARTIAL_BUFFER) < MIN_CHARS_FOR_SENTENCE:
-        return []
-
-    sentences = nltk.sent_tokenize(PARTIAL_BUFFER)
-
-    if len(sentences) <= 1:
-        return []
-
-    complete = sentences[:-1]
-    PARTIAL_BUFFER = sentences[-1]
-
-    complete = [s for s in complete if len(s.split()) >= 3]
-
-    return complete
-
-
-
-
-def update_buffer(new_sentences):
-    global sentence_buffer
-
-    for sent in new_sentences:
-        if len(sent.split()) < 3:
-            continue
-
-        if is_duplicate_sentence(sent, sentence_buffer):
-            continue
-
-        sentence_buffer.append(sent)
-
-    if len(sentence_buffer) > ROLLING_WINDOW:
-        sentence_buffer = sentence_buffer[-ROLLING_WINDOW:]
-
-    return " ".join(sentence_buffer)
-
+_sentence_buffer = deque()
 
 
 def reset_buffer():
-    """Clears the rolling window buffer."""
-    global sentence_buffer
-    sentence_buffer = []
+    """Clear the global rolling buffer."""
+    _sentence_buffer.clear()
+
+
+def clean_asr_text(text):
+    """
+    Cleans noisy ASR fragments:
+    - removes stutters
+    - removes repeated words
+    - filters fragments shorter than 3 chars
+    - removes hyphenated partial words
+    """
+    if not text:
+        return ""
+
+    text = text.strip()
+
+    # Remove trailing hyphen fragments like "chemical-"
+    text = re.sub(r"\b\w+-\s*$", "", text)
+
+    # Tokenize
+    words = text.split()
+
+    cleaned_words = []
+    prev = None
+
+    for w in words:
+        # Remove single-letter or two-letter noise words
+        if len(w) < 3:
+            continue
+        
+        # Remove stutters ("Photos Photosynthesis")
+        if w.lower() == prev:
+            continue
+        
+        cleaned_words.append(w)
+        prev = w.lower()
+
+    return " ".join(cleaned_words).strip()
+
+
+
+def segment_sentences(text: str):
+    """
+    Naive sentence segmentation based on punctuation.
+    You can replace this with a better segmenter if needed,
+    but this is sufficient for the project.
+    """
+    if not text:
+        return []
+
+    # Split on sentence-ending punctuation
+    parts = re.split(r"([.!?])", text)
+    sentences = []
+    current = ""
+
+    for part in parts:
+        if not part:
+            continue
+        current += part
+        if part in ".!?":
+            s = current.strip()
+            if len(s) > 0:
+                sentences.append(s)
+            current = ""
+
+    # Catch any trailing fragment
+    tail = current.strip()
+    if tail:
+        sentences.append(tail)
+
+    return sentences
+
+
+def update_buffer(new_sentences):
+    """
+    Update the rolling buffer with new sentences and return
+    the concatenated context string.
+    """
+    for s in new_sentences:
+        if not s or len(s.strip()) == 0:
+            continue
+        _sentence_buffer.append(s.strip())
+        while len(_sentence_buffer) > MAX_SENTENCES:
+            _sentence_buffer.popleft()
+
+    return " ".join(_sentence_buffer)

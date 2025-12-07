@@ -1,62 +1,146 @@
 import time
 import traceback
+from datetime import datetime
 
 from asr_stream import load_asr_model, stream_transcripts
-from text_chunker import segment_sentences, update_buffer, reset_buffer
+from text_chunker import (
+    segment_sentences,
+    update_buffer,
+    reset_buffer,
+    clean_asr_text,
+)
 from summarizer import load_summarizer_model, summarize
+import re
 
-SUMMARY_EVERY_N_SEGMENTS = 2  
+def clean_context_for_summary(text):
+    """
+    Remove fragments, stutters, incomplete thoughts,
+    and keep only well-formed sentences.
+    """
+    sentences = re.split(r"[.!?]", text)
+    cleaned = []
+
+    for s in sentences:
+        s = s.strip()
+
+        # Skip tiny fragments
+        if len(s.split()) < 4:
+            continue
+
+        # Skip stutter patterns
+        if re.search(r"\b(\w+)\s+\1\b", s.lower()):
+            continue
+
+        # Skip nonsense fragments (ends mid-word)
+        if re.search(r"[A-Za-z]-$", s):
+            continue
+
+        cleaned.append(s)
+
+    return ". ".join(cleaned)
+
+
+
+
+SUMMARY_EVERY_N_SEGMENTS = 12     # rolling summary frequency
+SILENCE_THRESHOLD = 3.0          # seconds of no speech triggers FINAL SUMMARY
+
+
+def pretty_header(title):
+    print("\n" + "=" * 60)
+    print(title)
+    print("=" * 60 + "\n")
+
+
+def timestamp():
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def save_final_summary(text):
+    """Write the final summary to a text file."""
+    filename = f"final_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(f"[SUMMARY] Final summary saved to: {filename}")
 
 
 def main():
-    print("[PIPELINE] Initializing components...")
+    pretty_header("NoteBridge Real-Time Summarization Pipeline")
 
-    # Load ASR model 
+    print(f"[{timestamp()}] Initializing ASR + Summarizer Models...")
     asr_model = load_asr_model()
 
-    # 2) Load summarizer model 
-    sum_tokenizer, sum_model = load_summarizer_model(
-        "models/finalized_m2_reduced_lead3.sav"
-    )
+    tokenizer, model = load_summarizer_model()
+    print("[SUMMARIZER] Model ready.\n")
 
-    # 3) Reset any existing sentence buffer
     reset_buffer()
 
-    print("[PIPELINE] Starting real-time NoteBridge demo.")
+    print(f"[{timestamp()}] System Ready. Listening...\n")
     print("Press Ctrl+C to stop.\n")
 
     segment_counter = 0
+    last_speech_time = time.time()
+    final_summary_done = False
 
     try:
-        # Stream raw text from ASR
         for asr_text in stream_transcripts(asr_model):
-            print(f"[ASR RAW] {asr_text}")
 
-            # Phase 2: segment into sentences
-            sentences = segment_sentences(asr_text)
+            # Track time of last detected speech
+            last_speech_time = time.time()
+
+            print(f"[{timestamp()}]  ASR: {asr_text}")
+
+            # Clean text before segmentation
+            cleaned = clean_asr_text(asr_text)
+            if not cleaned:
+                continue
+
+            sentences = segment_sentences(cleaned)
             if not sentences:
                 continue
 
-            # Update rolling window
-            rolling_context = update_buffer(sentences)
-            print(f"[CONTEXT] {rolling_context}")
+            # Update rolling buffer
+            context = update_buffer(sentences)
+            print(f"[{timestamp()}]  Context Window:")
+            print(f"   {context}\n")
 
             segment_counter += 1
 
-            if segment_counter % SUMMARY_EVERY_N_SEGMENTS != 0:
-                continue
+            # Rolling summary every N segments
+            if segment_counter % SUMMARY_EVERY_N_SEGMENTS == 0:
 
-            summary = summarize(rolling_context, sum_tokenizer, sum_model)
-            if summary.strip():
-                print("\n================ ROLLING SUMMARY ================")
+                cleaned_context = clean_context_for_summary(context)
+
+                if len(cleaned_context.split()) < 6:
+                    # Not enough meaningful content to summarize
+                    continue
+
+                summary = summarize(cleaned_context, tokenizer, model)
+
+                pretty_header("ROLLING SUMMARY")
                 print(summary)
-                print("=================================================\n")
+                print("=" * 60 + "\n")
 
-            time.sleep(0.1)
+
+            if not final_summary_done and (time.time() - last_speech_time) > SILENCE_THRESHOLD:
+                cleaned_context = clean_context_for_summary(context)
+                final_summary = summarize(cleaned_context, tokenizer, model).strip()
+
+
+                pretty_header("FINAL SUMMARY")
+                print(final_summary)
+                print("=" * 60 + "\n")
+
+                save_final_summary(final_summary)
+                final_summary_done = True
+                break  
+
+            time.sleep(0.01)
 
     except KeyboardInterrupt:
         print("\n[PIPELINE] Stopped by user.")
-    except Exception as e:
+
+    except Exception:
         print("[PIPELINE] Error occurred:")
         traceback.print_exc()
 
