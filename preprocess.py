@@ -19,14 +19,11 @@ def clean_text(text):
     text = text.strip()
     return text
 
-# Drop ID Column
 train_df = train_df[['article', 'highlights']]
 
-# Cleaning up text in the Article and Highlights columns
 train_df['article'] = train_df['article'].apply(clean_text)
 train_df['highlights'] = train_df['highlights'].apply(clean_text)
 
-# Trim passages, so that they meet token limits
 tokenizer = AutoTokenizer.from_pretrained(
     "google/pegasus-cnn_dailymail",
     use_fast=True,

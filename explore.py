@@ -14,7 +14,6 @@ try:
 except Exception:
     print("something went wrong.")
 
-# Examine lengths of articles
 train_df['article_length'] = train_df['article'].apply(len)
 train_df['highlight_length'] = train_df['highlights'].apply(len)
 

@@ -7,15 +7,11 @@ from asr_stream import load_asr_model, stream_transcripts
 from summarizer import load_summarizer_model, summarize
 
 
-# ================================
-# SETTINGS
-# ================================
-CHUNK_TIME_SECONDS = 5.0   # Summarize every 5 seconds
+
+CHUNK_TIME_SECONDS = 5.0   
 
 
-# ================================
-# UTILITY FUNCTIONS
-# ================================
+
 def timestamp():
     return datetime.now().strftime("%H:%M:%S")
 
@@ -26,9 +22,6 @@ def pretty_header(title):
     print("=" * 60 + "\n")
 
 
-# ============================================================
-# NEW STRICT SPAM FILTER (Option A)
-# ============================================================
 def _is_spam_fragment(text: str) -> bool:
     """
     Returns True if the fragment is clearly ASR hallucination spam.
@@ -43,27 +36,22 @@ def _is_spam_fragment(text: str) -> bool:
 
     t = text.lower().strip()
 
-    # 1. Detect repeated tokens (e.g. "8-bit 8-bit 8-bit...")
     tokens = t.split()
     for tok in set(tokens):
         if tokens.count(tok) >= 3:
             return True
 
-    # 2. Detect long repeated phrase blocks ("glory to you" etc.)
     if len(tokens) > 20:
-        # More than 20 tokens AND highly repetitive = spam
         unique_ratio = len(set(tokens)) / len(tokens)
         if unique_ratio < 0.5:
             return True
 
-    # 3. Detect non-language artifacts such as numeric or hyphen spam
     if re.search(r"\b\d+-bit\b", t):
         return True
 
     if re.search(r"([a-z]+ ){5,}\1", t):
         return True
 
-    # 4. If text has < 3 alphabetic words → garbage
     alpha_words = [tok for tok in tokens if any(c.isalpha() for c in tok)]
     if len(alpha_words) < 3:
         return True
@@ -71,9 +59,7 @@ def _is_spam_fragment(text: str) -> bool:
     return False
 
 
-# ================================
-# ASR REPAIR LAYER (AGGRESSIVE)
-# ================================
+
 def _normalize_text(text):
     if not text:
         return ""
@@ -171,7 +157,6 @@ def _merge_fragments(sentences):
         if not s_clean:
             continue
 
-        # Skip entire fragment if spam
         if _is_spam_fragment(s_clean):
             continue
 
@@ -185,7 +170,6 @@ def _merge_fragments(sentences):
         prev_lower = prev.lower()
         low = s_clean.lower()
 
-        # Merge short continuation
         if len(s_clean.split()) <= 4 or any(low.startswith(p) for p in continuation_starts):
             merged[-1] = prev + " " + s_clean.lstrip()
         else:
@@ -253,9 +237,6 @@ def repair_asr_text(text):
     return out
 
 
-# ================================
-# MAIN PIPELINE
-# ================================
 def main():
     print("\n============================================================")
     print("Initializing models...")
